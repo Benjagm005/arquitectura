@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Normalizador ETL</title>
+
+<style>
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+    font-family:Arial, sans-serif;
+}
+
+body{
+    background:#f4f4f4;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    min-height:100vh;
+    padding:20px;
+}
+
+.container{
+    background:white;
+    width:100%;
+    max-width:1000px;
+    padding:25px;
+    border-radius:12px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.1);
+}
+
+h1{
+    text-align:center;
+    margin-bottom:20px;
+}
+
+.opciones{
+    display:flex;
+    gap:10px;
+    margin-bottom:20px;
+}
+
+.opcion{
+    flex:1;
+}
+
+.opcion input{
+    display:none;
+}
+
+.opcion label{
+    display:block;
+    text-align:center;
+    padding:12px;
+    border:1px solid #ccc;
+    border-radius:8px;
+    cursor:pointer;
+    transition:0.2s;
+}
+
+.opcion input:checked + label{
+    background:#222;
+    color:white;
+}
+
+.upload{
+    border:2px dashed #aaa;
+    padding:25px;
+    text-align:center;
+    border-radius:10px;
+    background:#fafafa;
+    margin-bottom:15px;
+}
+
+button{
+    width:100%;
+    padding:12px;
+    border:none;
+    background:#222;
+    color:white;
+    border-radius:8px;
+    cursor:pointer;
+    font-size:15px;
+}
+
+button:hover{
+    background:#444;
+}
+
+.logs{
+    margin-top:20px;
+    background:#0f172a;
+    border-radius:16px;
+    padding:18px;
+    height:260px;
+    overflow:auto;
+    border:1px solid #1e293b;
+    box-shadow:
+        inset 0 0 10px rgba(255,255,255,0.03),
+        0 4px 12px rgba(0,0,0,0.15);
+
+    font-family:Consolas, monospace;
+}
+
+.logs::-webkit-scrollbar{
+    width:8px;
+}
+
+.logs::-webkit-scrollbar-track{
+    background:#111827;
+    border-radius:10px;
+}
+
+.logs::-webkit-scrollbar-thumb{
+    background:#334155;
+    border-radius:10px;
+}
+
+.logs p{
+    margin-bottom:10px;
+    padding:10px 14px;
+    border-radius:10px;
+    background:#111827;
+    color:#e2e8f0;
+    border-left:4px solid #38bdf8;
+    animation:fadeIn 0.3s ease;
+    font-size:13px;
+    line-height:1.4;
+}
+
+.logs p:hover{
+    background:#1e293b;
+    transform:translateX(3px);
+    transition:0.2s;
+}
+
+@keyframes fadeIn{
+
+    from{
+        opacity:0;
+        transform:translateY(5px);
+    }
+
+    to{
+        opacity:1;
+        transform:translateY(0);
+    }
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    margin-top:15px;
+    font-size:14px;
+}
+
+th{
+    background:#222;
+    color:white;
+    padding:10px;
+}
+
+td{
+    border:1px solid #ddd;
+    padding:10px;
+}
+
+tr:nth-child(even){
+    background:#f7f7f7;
+}
+
+details{
+    margin-top:20px;
+}
+
+.desplegable{
+    background:#222;
+    color:white;
+    padding:12px;
+    border-radius:8px;
+    cursor:pointer;
+    font-weight:bold;
+    list-style:none;
+}
+
+.desplegable::-webkit-details-marker{
+    display:none;
+}
+
+.info{
+    margin-bottom:15px;
+    font-size:13px;
+    color:#555;
+}
+
+</style>
+</head>
+<body>
+
+<div class="container">
+
+    <h1>Normalizador ETL</h1>
+
+    <div class="opciones">
+
+        <div class="opcion">
+            <input type="radio" name="tipo" id="famosos" checked>
+            <label for="famosos">Famosos</label>
+        </div>
+
+        <div class="opcion">
+            <input type="radio" name="tipo" id="lugares">
+            <label for="lugares">Lugares</label>
+        </div>
+
+    </div>
+
+    <div class="upload">
+        <p>Selecciona un archivo TXT</p>
+        <br>
+        <input type="file" id="fileInput" accept=".txt">
+    </div>
+
+    <button onclick="procesarArchivo()">
+        Procesar Datos
+    </button>
+
+    <div id="resultado"></div>
+
+    <div class="logs" id="logs"></div>
+
+</div>
+
+<script>
+
+function agregarLog(texto){
+
+    const logs = document.getElementById("logs");
+
+    const linea = document.createElement("p");
+
+    const hora = new Date().toLocaleTimeString();
+
+    linea.textContent = `[${hora}] ${texto}`;
+
+    logs.appendChild(linea);
+
+    logs.scrollTop = logs.scrollHeight;
+}
+
+function normalizarFecha(fecha){
+
+    fecha = fecha.trim();
+
+    fecha = fecha.replace(/\./g,"-");
+
+    if(
+        fecha.toLowerCase().includes("alrededor") ||
+        fecha.toLowerCase().includes("a.c")
+    ){
+
+        return {
+            fecha: "No confirmada",
+            valida: false
+        };
+    }
+
+    fecha = fecha.replace(/\//g,"-");
+
+    let partes = fecha.split("-");
+
+    if(partes.length !== 3){
+
+        return {
+            fecha: "No confirmada",
+            valida: false
+        };
+    }
+
+    let dia, mes, anio;
+
+    if(partes[0].length === 4){
+
+        anio = partes[0];
+        mes = partes[1];
+        dia = partes[2];
+
+    }else{
+
+        dia = partes[0];
+        mes = partes[1];
+        anio = partes[2];
+    }
+
+    dia = parseInt(dia);
+    mes = parseInt(mes);
+
+    if(
+        isNaN(dia) ||
+        isNaN(mes) ||
+        dia < 1 ||
+        dia > 31 ||
+        mes < 1 ||
+        mes > 12
+    ){
+
+        return {
+            fecha: "No confirmada",
+            valida: false
+        };
+    }
+
+    dia = String(dia).padStart(2,"0");
+    mes = String(mes).padStart(2,"0");
+
+    return {
+        fecha: `${dia}-${mes}-${anio}`,
+        valida: true
+    };
+}
+
+function calcularEdad(fecha){
+
+    if(fecha === "No confirmada"){
+        return "No se puede calcular";
+    }
+
+    let partes = fecha.split("-");
+
+    let nacimiento = new Date(
+        partes[2],
+        partes[1]-1,
+        partes[0]
+    );
+
+    let hoy = new Date();
+
+    let edad =
+        hoy.getFullYear() -
+        nacimiento.getFullYear();
+
+    let mes =
+        hoy.getMonth() -
+        nacimiento.getMonth();
+
+    if(
+        mes < 0 ||
+        (
+            mes === 0 &&
+            hoy.getDate() < nacimiento.getDate()
+        )
+    ){
+        edad--;
+    }
+
+    return edad;
+}
+
+function esCumpleaños(fecha){
+
+    if(fecha === "No confirmada"){
+        return "NO";
+    }
+
+    let partes = fecha.split("-");
+
+    let hoy = new Date();
+
+    return (
+        parseInt(partes[0]) === hoy.getDate()
+        &&
+        parseInt(partes[1]) ===
+        (hoy.getMonth()+1)
+    ) ? "SI" : "NO";
+}
+
+function procesarArchivo(){
+
+    document.getElementById("logs").innerHTML = "";
+    document.getElementById("resultado").innerHTML = "";
+
+    agregarLog("Iniciando proceso ETL");
+
+    const archivo =
+        document.getElementById("fileInput").files[0];
+
+    if(!archivo){
+
+        alert("Selecciona un archivo");
+
+        return;
+    }
+
+    agregarLog("Archivo cargado correctamente");
+
+    const esFamosos =
+        document.getElementById("famosos").checked;
+
+    const lector = new FileReader();
+
+    lector.onload = function(e){
+
+        const contenido = e.target.result;
+
+        const lineas = contenido.split(/\r?\n/);
+
+        agregarLog(`${lineas.length} registros encontrados`);
+
+        let registros = new Set();
+
+        let duplicados = 0;
+
+        let famosos = [];
+
+        let tablaLugares = [];
+        let tablaGeo = [];
+        let tablaDirecciones = [];
+
+        let contadorID = 1;
+
+        lineas.forEach((linea) => {
+
+            if(linea.trim() === "") return;
+
+            if(
+                linea.toLowerCase().includes("direccion") ||
+                linea.toLowerCase().includes("nombre") ||
+                linea.toLowerCase().includes("fecha")
+            ){
+                return;
+            }
+
+            if(esFamosos){
+
+                const match = linea.match(
+                    /^\d+\.\s*(.*?)\s*-\s*(.+)$/
+                );
+
+                if(!match){
+                    return;
+                }
+
+                let nombre = match[1].trim();
+
+                let fechaOriginal = match[2].trim();
+
+                let resultadoFecha =
+                    normalizarFecha(fechaOriginal);
+
+                let fecha = resultadoFecha.fecha;
+
+                let edad = resultadoFecha.valida
+                    ? calcularEdad(fecha)
+                    : "No se puede calcular";
+
+                let cumple = resultadoFecha.valida
+                    ? esCumpleaños(fecha)
+                    : "NO";
+
+                let clave =
+`${nombre.toLowerCase()}|${fecha}`;
+
+                if(registros.has(clave)){
+
+                    duplicados++;
+
+                    agregarLog(
+                        `Duplicado eliminado: ${nombre}`
+                    );
+
+                    return;
+                }
+
+                registros.add(clave);
+
+                famosos.push({
+                    nombre,
+                    fecha,
+                    edad,
+                    cumple
+                });
+
+            }else{
+
+                let direccion =
+                    linea.replace(/^\d+\.\s*/,"").trim();
+
+                if(registros.has(direccion.toLowerCase())){
+
+                    duplicados++;
+
+                    return;
+                }
+
+                registros.add(
+                    direccion.toLowerCase()
+                );
+
+                let partes =
+                    direccion.split(",");
+
+                let calle =
+                    partes[0]?.trim()
+                    || "Sin calle";
+
+                let ciudad =
+                    partes[1]?.trim()
+                    || "Sin ciudad";
+
+                let pais =
+                    partes[2]?.trim()
+                    || "Sin país";
+
+                tablaLugares.push({
+                    id: contadorID,
+                    nombre: direccion
+                });
+
+                tablaGeo.push({
+                    id: contadorID,
+                    georeferencia:
+                        `${Math.random()
+                            .toFixed(6)},
+                         ${Math.random()
+                            .toFixed(6)}`
+                });
+
+                tablaDirecciones.push({
+                    id: contadorID,
+                    nombre_calle: calle,
+                    numero_calle:
+                        Math.floor(Math.random()*999)+1,
+                    ciudad_estado_provincia:
+                        ciudad,
+                    pais: pais
+                });
+
+                contadorID++;
+            }
+
+        });
+
+        agregarLog(
+            `${duplicados} duplicados eliminados`
+        );
+
+        agregarLog("Proceso completado");
+
+        if(esFamosos){
+
+            mostrarTablaFamosos(famosos);
+
+        }else{
+
+            mostrarTablasLugares(
+                tablaLugares,
+                tablaGeo,
+                tablaDirecciones
+            );
+
+            agregarLog(
+                "3 tablas generadas correctamente"
+            );
+        }
+
+    };
+
+    lector.readAsText(archivo);
+}
+
+function mostrarTablaFamosos(datos){
+
+    let html = `
+
+    <details open>
+
+        <summary class="desplegable">
+            Tabla Famosos (${datos.length})
+        </summary>
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>Nombre</th>
+                    <th>Fecha</th>
+                    <th>Edad</th>
+                    <th>Cumpleaños</th>
+                </tr>
+            </thead>
+
+            <tbody>
+    `;
+
+    datos.forEach(d => {
+
+        html += `
+        <tr>
+            <td>${d.nombre}</td>
+            <td>${d.fecha}</td>
+            <td>${d.edad}</td>
+            <td>${d.cumple}</td>
+        </tr>
+        `;
+    });
+
+    html += `
+            </tbody>
+
+        </table>
+
+    </details>
+    `;
+
+    document.getElementById("resultado")
+        .innerHTML = html;
+}
+
+function mostrarTablasLugares(
+    lugares,
+    geo,
+    direcciones
+){
+
+    let html = "";
+
+    html += `
+    <details open>
+
+        <summary class="desplegable">
+            Tabla Lugares (${lugares.length})
+        </summary>
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Nombre</th>
+                </tr>
+            </thead>
+
+            <tbody>
+    `;
+
+    lugares.forEach(l => {
+
+        html += `
+        <tr>
+            <td>${l.id}</td>
+            <td>${l.nombre}</td>
+        </tr>
+        `;
+    });
+
+    html += `
+            </tbody>
+
+        </table>
+
+    </details>
+    `;
+
+    html += `
+    <details>
+
+        <summary class="desplegable">
+            Tabla Georeferencias (${geo.length})
+        </summary>
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Georeferencia</th>
+                </tr>
+            </thead>
+
+            <tbody>
+    `;
+
+    geo.forEach(g => {
+
+        html += `
+        <tr>
+            <td>${g.id}</td>
+            <td>${g.georeferencia}</td>
+        </tr>
+        `;
+    });
+
+    html += `
+            </tbody>
+
+        </table>
+
+    </details>
+    `;
+
+    html += `
+    <details>
+
+        <summary class="desplegable">
+            Tabla Direcciones (${direcciones.length})
+        </summary>
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Calle</th>
+                    <th>Número</th>
+                    <th>Ciudad</th>
+                    <th>País</th>
+                </tr>
+            </thead>
+
+            <tbody>
+    `;
+
+    direcciones.forEach(d => {
+
+        html += `
+        <tr>
+            <td>${d.id}</td>
+            <td>${d.nombre_calle}</td>
+            <td>${d.numero_calle}</td>
+            <td>${d.ciudad_estado_provincia}</td>
+            <td>${d.pais}</td>
+        </tr>
+        `;
+    });
+
+    html += `
+            </tbody>
+
+        </table>
+
+    </details>
+    `;
+
+    document.getElementById("resultado")
+        .innerHTML = html;
+}
+
+</script>
+
+</body>
+</html>
