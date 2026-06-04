@@ -4,7 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Normalizador ETL</title>
+<link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet/dist/leaflet.css"/>
 
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <style>
 
 *{
@@ -196,6 +200,13 @@ details{
     color:#555;
 }
 
+#mapaLugares{
+    width:100%;
+    height:450px;
+    margin-top:20px;
+    border-radius:12px;
+}
+
 </style>
 </head>
 <body>
@@ -216,6 +227,21 @@ details{
             <label for="lugares">Lugares</label>
         </div>
 
+        <div class="opcion">
+            <input type="radio" name="tipo" id="comunas">
+            <label for="comunas">Comunas</label>
+        </div>
+
+        <div style="margin-bottom:15px;">
+            <label><b>Formato de comunas:</b></label>
+            <select id="formatoComuna">
+                <option value="titulo">Formato Título</option>
+                <option value="mayusculas">MAYÚSCULAS</option>
+                <option value="minusculas">minúsculas</option>
+            </select>
+        </div>
+
+
     </div>
 
     <div class="upload">
@@ -229,12 +255,15 @@ details{
     </button>
 
     <div id="resultado"></div>
+    
+    <div id="resultadoImagen"></div>
 
     <div class="logs" id="logs"></div>
 
 </div>
 
 <script>
+let famososGlobal = [];
 
 function agregarLog(texto){
 
@@ -322,6 +351,35 @@ function normalizarFecha(fecha){
     };
 }
 
+function normalizarComuna(texto, formato){
+
+    texto = texto.trim();
+
+    texto = texto.replace(/\s+/g, " ");
+
+    if(formato === "mayusculas"){
+        texto = texto.toUpperCase();
+    }
+
+    else if(formato === "minusculas"){
+        texto = texto.toLowerCase();
+    }
+
+    else{
+
+        texto = texto
+            .toLowerCase()
+            .split(" ")
+            .map(palabra =>
+                palabra.charAt(0).toUpperCase() +
+                palabra.slice(1)
+            )
+            .join(" ");
+    }
+
+    return texto;
+}
+
 function calcularEdad(fecha){
 
     if(fecha === "No confirmada"){
@@ -377,6 +435,82 @@ function esCumpleaños(fecha){
     ) ? "SI" : "NO";
 }
 
+async function buscarComunaEnAPI(nombreComuna){
+
+    try{
+
+        const url =
+            "https://chileabierto.cl/api/v1/comunas?search=" +
+            encodeURIComponent(nombreComuna);
+
+        const respuesta = await fetch(url);
+
+        if(!respuesta.ok){
+            throw new Error("Error al conectar API");
+        }
+
+        return await respuesta.json();
+
+    }catch(error){
+
+        console.warn("API no disponible por CORS:", error);
+
+        return null;
+    }
+}
+
+async function cargarComunasOficiales(){
+
+    const respuesta = await fetch("comunas_oficial.json");
+
+    if(!respuesta.ok){
+        throw new Error("No se pudo cargar comunas_oficial.json");
+    }
+
+    const datos = await respuesta.json();
+
+    return datos.data;
+}
+
+function buscarComunaOficial(nombreComuna, comunasOficiales){
+
+    const claveComuna = nombreComuna
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+
+    return comunasOficiales.find(item => {
+
+        const claveOficial = item.name
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase();
+
+        return claveOficial === claveComuna;
+    });
+}
+
+function buscarSugerenciaComuna(nombreComuna, comunasOficiales){
+
+    const claveComuna = nombreComuna
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+
+    return comunasOficiales.find(item => {
+
+        if(!item.name) return false;
+
+        const claveOficial = item.name
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase();
+
+        return claveOficial.includes(claveComuna) ||
+               claveComuna.includes(claveOficial);
+    });
+}
+
 function procesarArchivo(){
 
     document.getElementById("logs").innerHTML = "";
@@ -384,191 +518,381 @@ function procesarArchivo(){
 
     agregarLog("Iniciando proceso ETL");
 
-    const archivo =
-        document.getElementById("fileInput").files[0];
+    const archivo = document.getElementById("fileInput").files[0];
 
     if(!archivo){
-
         alert("Selecciona un archivo");
-
         return;
     }
 
     agregarLog("Archivo cargado correctamente");
 
-    const esFamosos =
-        document.getElementById("famosos").checked;
+    const esFamosos = document.getElementById("famosos").checked;
+    const esComunas = document.getElementById("comunas").checked;
+
+    agregarLog("Modo: " + (
+        esFamosos ? "Famosos" :
+        esComunas ? "Comunas" :
+        "Lugares"
+    ));
 
     const lector = new FileReader();
 
-    lector.onload = function(e){
+    lector.onload = async function(e){
 
-        const contenido = e.target.result;
+        try{
+            agregarLog("Leyendo contenido del archivo");
 
-        const lineas = contenido.split(/\r?\n/);
+            const contenido = e.target.result;
+            const lineas = contenido.split(/\r?\n/);
 
-        agregarLog(`${lineas.length} registros encontrados`);
+            agregarLog(`${lineas.length} líneas encontradas`);
 
-        let registros = new Set();
-
-        let duplicados = 0;
-
-        let famosos = [];
-
-        let tablaLugares = [];
-        let tablaGeo = [];
-        let tablaDirecciones = [];
-
-        let contadorID = 1;
-
-        lineas.forEach((linea) => {
-
-            if(linea.trim() === "") return;
-
-            if(
-                linea.toLowerCase().includes("direccion") ||
-                linea.toLowerCase().includes("nombre") ||
-                linea.toLowerCase().includes("fecha")
-            ){
-                return;
+            let comunasOficiales = []
+            if(esComunas){
+                comunasOficiales = await cargarComunasOficiales();
             }
 
-            if(esFamosos){
+            let registros = new Set();
+            let duplicados = 0;
+            let ignorados = 0;
 
-                const match = linea.match(
-                    /^\d+\.\s*(.*?)\s*-\s*(.+)$/
-                );
+            let famosos = [];
+            let comunas = [];
+            let tablaLugares = [];
+            let tablaGeo = [];
+            let tablaDirecciones = [];
 
-                if(!match){
-                    return;
+            let contadorID = 1;
+
+            for(let i = 0; i < lineas.length; i++){
+
+                let linea = lineas[i].trim();
+
+                if(linea === ""){
+                    ignorados++;
+                    continue;
                 }
 
-                let nombre = match[1].trim();
-
-                let fechaOriginal = match[2].trim();
-
-                let resultadoFecha =
-                    normalizarFecha(fechaOriginal);
-
-                let fecha = resultadoFecha.fecha;
-
-                let edad = resultadoFecha.valida
-                    ? calcularEdad(fecha)
-                    : "No se puede calcular";
-
-                let cumple = resultadoFecha.valida
-                    ? esCumpleaños(fecha)
-                    : "NO";
-
-                let clave =
-`${nombre.toLowerCase()}|${fecha}`;
-
-                if(registros.has(clave)){
-
-                    duplicados++;
-
-                    agregarLog(
-                        `Duplicado eliminado: ${nombre}`
-                    );
-
-                    return;
+                // Evita tomar encabezados como datos.
+                const lineaMin = linea.toLowerCase();
+                if(
+                    lineaMin === "direccion" ||
+                    lineaMin === "dirección" ||
+                    lineaMin === "nombre" ||
+                    lineaMin === "fecha" ||
+                    lineaMin === "comuna"
+                ){
+                    ignorados++;
+                    continue;
                 }
 
-                registros.add(clave);
+                if(esComunas){
 
-                famosos.push({
-                    nombre,
-                    fecha,
-                    edad,
-                    cumple
-                });
+                    let formato = document.getElementById("formatoComuna").value;
 
-            }else{
+                    let comuna = linea
+                        .replace(/^\d+\.\s*/, "")
+                        .trim();
 
-                let direccion =
-                    linea.replace(/^\d+\.\s*/,"").trim();
+                    comuna = normalizarComuna(comuna, formato);
+
+                    const clave = comuna
+                        .normalize("NFD")
+                        .replace(/[\u0300-\u036f]/g,"")
+                        .toLowerCase();
+
+                    if(registros.has(clave)){
+                        duplicados++;
+                        continue;
+                    }
+
+                    registros.add(clave);
+
+                    const oficial = buscarComunaOficial(comuna, comunasOficiales);
+                    const sugerencia = !oficial
+                        ? buscarSugerenciaComuna(comuna, comunasOficiales)
+                        : null;
+
+                    comunas.push({
+                        id: comunas.length + 1,
+                        nombre: oficial ? oficial.name : comuna,
+                        region: oficial ? oficial.region_name : "No encontrada",
+                        habitantes: oficial ? oficial.population : "No encontrado",
+                        estado: oficial ? "Consolidada" : "No encontrada en fuente oficial"
+                    });
+
+                    continue;
+                }
+
+                if(esFamosos){
+
+                    const match = linea.match(/^\d+\.\s*(.*?)\s*-\s*(.+)$/);
+
+                    if(!match){
+                        ignorados++;
+                        continue;
+                    }
+
+                    let nombre = match[1].trim();
+                    let fechaOriginal = match[2].trim();
+                    let resultadoFecha = normalizarFecha(fechaOriginal);
+                    let fecha = resultadoFecha.fecha;
+
+                    let edad = resultadoFecha.valida
+                        ? calcularEdad(fecha)
+                        : "No se puede calcular";
+
+                    let cumple = resultadoFecha.valida
+                        ? esCumpleaños(fecha)
+                        : "NO";
+
+                    let clave = `${nombre.toLowerCase()}|${fecha}`;
+
+                    if(registros.has(clave)){
+                        duplicados++;
+                        continue;
+                    }
+
+                    registros.add(clave);
+
+                    famosos.push({
+                        nombre,
+                        fecha,
+                        edad,
+                        cumple
+                    });
+
+                    continue;
+                }
+                
+                if(
+                    lineaMin.includes("nombre del lugar") ||
+                    lineaMin.includes("dirección completa") ||
+                    lineaMin.includes("direccion completa") ||
+                    lineaMin.includes("georeferencia")
+                ){
+                    ignorados++;
+                    continue;
+                }
+
+                let direccion = linea.replace(/^\d+\.\s*/, "").trim();
 
                 if(registros.has(direccion.toLowerCase())){
-
                     duplicados++;
-
-                    return;
+                    continue;
                 }
 
-                registros.add(
-                    direccion.toLowerCase()
-                );
+                registros.add(direccion.toLowerCase());
 
-                let partes =
-                    direccion.split(",");
+                let partes = linea.split(";");
 
-                let calle =
-                    partes[0]?.trim()
-                    || "Sin calle";
+                let nombreLugar = partes[0]?.trim() || "Sin nombre";
+                let direccionCompleta = partes[1]?.trim() || "Sin dirección";
+                let georeferencia = partes[2]?.trim() || "Sin georeferencia";
 
-                let ciudad =
-                    partes[1]?.trim()
-                    || "Sin ciudad";
+                let partesDireccion = direccionCompleta.split(",");
 
-                let pais =
-                    partes[2]?.trim()
-                    || "Sin país";
+                let calleNumero = partesDireccion[0]?.trim() || "Sin calle";
+                let ciudad = partesDireccion[1]?.trim() || "Sin ciudad";
+                let pais = partesDireccion[2]?.trim() || "Chile";
+
+                let matchNumero = calleNumero.match(/\d+/);
+
+                let numeroCalle = matchNumero
+                    ? matchNumero[0]
+                    : "S/N";
+
+                let nombreCalle = calleNumero
+                    .replace(/\d+/g, "")
+                    .trim();
+
+                if(nombreCalle === ""){
+                    nombreCalle = calleNumero;
+                }
 
                 tablaLugares.push({
                     id: contadorID,
-                    nombre: direccion
+                    nombre_lugar: nombreLugar
                 });
 
                 tablaGeo.push({
                     id: contadorID,
-                    georeferencia:
-                        `${Math.random()
-                            .toFixed(6)},
-                         ${Math.random()
-                            .toFixed(6)}`
+                    lugar_id: contadorID,
+                    georeferencia: georeferencia
                 });
 
                 tablaDirecciones.push({
                     id: contadorID,
-                    nombre_calle: calle,
-                    numero_calle:
-                        Math.floor(Math.random()*999)+1,
-                    ciudad_estado_provincia:
-                        ciudad,
+                    nombre_calle: nombreCalle,
+                    numero_calle: numeroCalle,
+                    ciudad_estado_provincia: ciudad,
                     pais: pais
                 });
 
                 contadorID++;
             }
 
-        });
+            agregarLog(`${duplicados} duplicados eliminados`);
+            agregarLog(`${ignorados} líneas ignoradas`);
 
-        agregarLog(
-            `${duplicados} duplicados eliminados`
-        );
+            if(esFamosos){
+                famososGlobal = famosos;
+                mostrarTablaFamosos(famosos);
+                agregarLog(`Tabla Famosos generada con ${famosos.length} registros`);
+            }else if(esComunas){
+                let consolidadas = comunas.filter(c =>
+                    c.estado === "Consolidada"
+                ).length;
+                
+                let noEncontradas = comunas.filter(c =>
+                    c.estado !== "Consolidada"
+                ).length;
 
-        agregarLog("Proceso completado");
+                let auditoriaComunas = {
+                    fecha: new Date().toLocaleString(),
+                    registrosLeidos: lineas.length,
+                    duplicadosEliminados: duplicados,
+                    lineasIgnoradas: ignorados,
+                    comunasConsolidadas: consolidadas,
+                    comunasNoEncontradas: noEncontradas
+                };
 
-        if(esFamosos){
+                console.log(auditoriaComunas);
 
-            mostrarTablaFamosos(famosos);
+                mostrarTablaComunas(comunas);
+                mostrarAuditoriaComunas(auditoriaComunas);
 
-        }else{
+                 agregarLog(
+                    `Tabla Comunas generada con ${comunas.length} registros`
+                );
 
-            mostrarTablasLugares(
-                tablaLugares,
-                tablaGeo,
-                tablaDirecciones
-            );
+            }else{
+                mostrarTablasLugares(
+                    tablaLugares,
+                    tablaGeo,
+                    tablaDirecciones
+                );
 
-            agregarLog(
-                "3 tablas generadas correctamente"
-            );
+                mostrarMapaLugares(
+                    tablaLugares,
+                    tablaGeo
+                );
+
+                agregarLog("3 tablas generadas correctamente");
+            }
+
+            agregarLog("Proceso completado");
+
+        }catch(error){
+            agregarLog("ERROR: " + error.message);
+            console.error(error);
         }
-
     };
 
-    lector.readAsText(archivo);
+    lector.onerror = function(){
+        agregarLog("ERROR: No se pudo leer el archivo");
+    };
+
+    agregarLog("Procesando archivo...");
+    lector.readAsText(archivo, "windows-1252");
+}
+
+
+
+function mostrarTablaComunas(comunas){
+
+    let html = `
+
+    <details open>
+
+        <summary class="desplegable">
+            Tabla Comunas (${comunas.length})
+        </summary>
+
+        <table>
+
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Comuna</th>
+                    <th>Región</th>
+                    <th>Habitantes</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+
+            <tbody>
+    `;
+
+    comunas.forEach((comuna, index) => {
+        html += `
+        <tr>
+            <td>${index + 1}</td>
+            <td>${comuna.nombre}</td>
+            <td>${comuna.region}</td>
+            <td>${comuna.habitantes}</td>
+            <td>${comuna.estado}</td>
+        </tr>
+        `;
+    });
+
+    html += `
+            </tbody>
+
+        </table>
+
+    </details>
+    `;
+
+    document.getElementById("resultado")
+        .innerHTML = html;
+}
+
+function mostrarAuditoriaComunas(auditoria){
+
+    let html = `
+    <details open>
+        <summary class="desplegable">
+            Auditoría del proceso
+        </summary>
+
+        <table>
+            <tbody>
+                <tr>
+                    <th>Fecha y hora de ejecución</th>
+                    <td>${auditoria.fecha}</td>
+                </tr>
+                <tr>
+                    <th>Registros leídos desde el archivo</th>
+                    <td>${auditoria.registrosLeidos}</td>
+                </tr>
+                <tr>
+                    <th>Comunas procesadas</th>
+                    <td>${auditoria.comunasConsolidadas + auditoria.comunasNoEncontradas}</td>
+                </tr>
+                <tr>
+                    <th>Duplicados eliminados</th>
+                    <td>${auditoria.duplicadosEliminados}</td>
+                </tr>
+                <tr>
+                    <th>Registros consolidados correctamente</th>
+                    <td>${auditoria.comunasConsolidadas}</td>
+                </tr>
+                <tr>
+                    <th>Registros no encontrados</th>
+                    <td>${auditoria.comunasNoEncontradas}</td>
+                </tr>
+                <tr>
+                    <th>Errores producidos</th>
+                    <td>Sin errores</td>
+                </tr>
+            </tbody>
+        </table>
+    </details>
+    `;
+
+    document.getElementById("resultado").innerHTML += html;
 }
 
 function mostrarTablaFamosos(datos){
@@ -589,6 +913,7 @@ function mostrarTablaFamosos(datos){
                     <th>Fecha</th>
                     <th>Edad</th>
                     <th>Cumpleaños</th>
+                    <th>Imagen</th>
                 </tr>
             </thead>
 
@@ -603,6 +928,11 @@ function mostrarTablaFamosos(datos){
             <td>${d.fecha}</td>
             <td>${d.edad}</td>
             <td>${d.cumple}</td>
+            <td>
+                <button onclick="verImagenFamoso(${d.id})">
+                    Ver imagen
+                </button>   
+            </td>
         </tr>
         `;
     });
@@ -617,6 +947,65 @@ function mostrarTablaFamosos(datos){
 
     document.getElementById("resultado")
         .innerHTML = html;
+}
+
+async function verImagenFamoso(id){
+
+    const famoso = famososGlobal.find(f => f.id === id);
+
+    if(!famoso){
+        alert("No se encontró el famoso");
+        return;
+    }
+
+    const resultado = await obtenerImagenWikipedia(famoso.nombre);
+
+    if(!resultado){
+        alert("No se encontró imagen para " + famoso.nombre);
+        return;
+    }
+
+    document.getElementById("resultadoImagen").innerHTML = `
+        <div style="margin-top:20px; text-align:center;">
+            <h3>${famoso.nombre}</h3>
+            <p><b>Fecha nacimiento:</b> ${famoso.fecha}</p>
+            <p><b>Edad:</b> ${famoso.edad}</p>
+            <p><b>Cumpleaños:</b> ${famoso.cumple}</p>
+
+            <img src="${resultado.imagen}" style="max-width:250px; border-radius:12px;">
+
+            <p>
+                Fuente:
+                <a href="${resultado.fuente}" target="_blank">
+                    Wikipedia
+                </a>
+            </p>
+        </div>
+    `;
+}
+
+async function obtenerImagenWikipedia(nombre){
+
+    const url =
+        "https://en.wikipedia.org/api/rest_v1/page/summary/" +
+        encodeURIComponent(nombre);
+
+    const respuesta = await fetch(url);
+
+    if(!respuesta.ok){
+        return null;
+    }
+
+    const datos = await respuesta.json();
+
+    if(!datos.thumbnail){
+        return null;
+    }
+
+    return {
+        imagen: datos.thumbnail.source,
+        fuente: datos.content_urls.desktop.page
+    };
 }
 
 function mostrarTablasLugares(
@@ -639,7 +1028,7 @@ function mostrarTablasLugares(
             <thead>
                 <tr>
                     <th>ID</th>
-                    <th>Nombre</th>
+                    <th>Nombre Lugar</th>
                 </tr>
             </thead>
 
@@ -651,7 +1040,7 @@ function mostrarTablasLugares(
         html += `
         <tr>
             <td>${l.id}</td>
-            <td>${l.nombre}</td>
+            <td>${l.nombre_lugar}</td>
         </tr>
         `;
     });
@@ -713,9 +1102,9 @@ function mostrarTablasLugares(
             <thead>
                 <tr>
                     <th>ID</th>
-                    <th>Calle</th>
-                    <th>Número</th>
-                    <th>Ciudad</th>
+                    <th>Nombre Calle</th>
+                    <th>Número Calle</th>
+                    <th>Ciudad / Estado / Provincia</th>
                     <th>País</th>
                 </tr>
             </thead>
@@ -744,8 +1133,54 @@ function mostrarTablasLugares(
     </details>
     `;
 
-    document.getElementById("resultado")
-        .innerHTML = html;
+    document.getElementById("resultado").innerHTML =
+        html +
+        `<div id="mapaLugares"></div>`;
+}
+
+let mapa = null;
+
+function mostrarMapaLugares(lugares, geo){
+
+    if(mapa !== null){
+        mapa.remove();
+    }
+
+    mapa = L.map("mapaLugares").setView([0, 0], 2);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap"
+    }).addTo(mapa);
+
+    let puntos = [];
+
+    geo.forEach(g => {
+
+        let partes = g.georeferencia.split(",");
+
+        let lat = parseFloat(partes[0]);
+        let lng = parseFloat(partes[1]);
+
+        if(isNaN(lat) || isNaN(lng)){
+            return;
+        }
+
+        let lugar = lugares.find(l => l.id === g.id);
+
+        L.marker([lat, lng])
+            .addTo(mapa)
+            .bindPopup(`
+                <b>${lugar ? lugar.nombre_lugar : "Lugar"}</b><br>
+                Latitud: ${lat}<br>
+                Longitud: ${lng}
+            `);
+
+        puntos.push([lat, lng]);
+    });
+
+    if(puntos.length > 0){
+        mapa.fitBounds(puntos);
+    }
 }
 
 </script>
