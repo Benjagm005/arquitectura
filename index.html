@@ -597,10 +597,19 @@ function procesarArchivo(){
 
                     comuna = normalizarComuna(comuna, formato);
 
-                    const clave = comuna
+                    const oficial = buscarComunaOficial(
+                        comuna,
+                        comunasOficiales
+                    );
+
+                    let nombreFinal = oficial ? oficial.name : comuna;
+
+                    const clave = nombreFinal
                         .normalize("NFD")
                         .replace(/[\u0300-\u036f]/g,"")
-                        .toLowerCase();
+                        .toLowerCase()
+                        .replace(/\s+/g, " ")
+                        .trim();
 
                     if(registros.has(clave)){
                         duplicados++;
@@ -608,16 +617,14 @@ function procesarArchivo(){
                     }
 
                     registros.add(clave);
-
-                    const oficial = buscarComunaOficial(comuna, comunasOficiales);
                     const sugerencia = !oficial
                         ? buscarSugerenciaComuna(comuna, comunasOficiales)
                         : null;
 
                     comunas.push({
                         id: comunas.length + 1,
-                        nombre: oficial ? oficial.name : comuna,
-                        region: oficial ? oficial.region_name : "No encontrada",
+                        nombre: nombreFinal,
+                        region: oficial ? corregirTexto(oficial.region_name) : "No encontrada",
                         habitantes: oficial ? oficial.population : "No encontrado",
                         estado: oficial ? "Consolidada" : "No encontrada en fuente oficial"
                     });
@@ -795,7 +802,7 @@ function procesarArchivo(){
     };
 
     agregarLog("Procesando archivo...");
-    lector.readAsText(archivo, "windows-1252");
+    lector.readAsText(archivo, "utf-8");
 }
 
 
@@ -1181,6 +1188,18 @@ function mostrarMapaLugares(lugares, geo){
     if(puntos.length > 0){
         mapa.fitBounds(puntos);
     }
+}
+
+function corregirTexto(texto){
+
+    return texto
+        .replace(/Ã‘/g, "Ñ")
+        .replace(/Ã±/g, "ñ")
+        .replace(/Ã¡/g, "á")
+        .replace(/Ã©/g, "é")
+        .replace(/Ã­/g, "í")
+        .replace(/Ã³/g, "ó")
+        .replace(/Ãº/g, "ú");
 }
 
 </script>
